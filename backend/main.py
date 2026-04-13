@@ -52,6 +52,11 @@ def lastfm_get(params: dict) -> dict:
     response.raise_for_status()
     return response.json()
 
+#======================
+#   TICKET MASTER API
+#======================
+ticketmaster_id = os.getenv("TICKETMASTER_ID")
+ticketmaster_base_url = "https://app.ticketmaster.com/discovery/v2/"
 
 #======================
 #   RETRIVAL FUNCTIONS
@@ -144,6 +149,52 @@ def get_trending_songs(token):
     
     return songs
 
+def get_upcoming_shows_artist(artist_name: str) -> list:
+    url = "https://app.ticketmaster.com/discovery/v2/events.json"
+    response = get(url, params={
+        "apikey": ticketmaster_id, 
+        "keyword": artist_name, 
+        "classificationName": "music"
+    })
+    events = response.json().get("_embedded", {}).get("events", [])
+
+    return[
+        {
+            "name": e["name"],
+            "date": e["dates"]["start"]["localDate"],
+            "venue": e["_embedded"]["venues"][0]["name"],
+            "city": e["_embedded"]["venues"][0]["city"]["name"],
+            "url": e["url"]
+        }
+        for e in events
+    ]
+
+
+def get_upcoming_shows_city(city_name: str) -> list:
+    url = "https://app.ticketmaster.com/discovery/v2/events.json"
+    
+    response = get(url, params={
+        "apikey": ticketmaster_id,
+        "city": city_name,
+        "classificationName": "music",
+        "sort": "date,asc"
+    })
+
+    response.raise_for_status()  # surface any HTTP errors early
+
+    events = response.json().get("_embedded", {}).get("events", [])
+
+    return [
+        {
+            "name": e["name"],
+            "date": e["dates"]["start"]["localDate"],
+            "venue": e["_embedded"]["venues"][0]["name"],
+            "city": e["_embedded"]["venues"][0]["city"]["name"],
+            "url": e["url"]
+        }
+        for e in events
+    ]
+
 #Probably wont be used do to name being accessible but contents are not
 def search_playlists(token, playlist_name):
     url = "https://api.spotify.com/v1/search"
@@ -174,3 +225,5 @@ print ("TOKEN: " + token)
 # treding_id = search_trending_playlist(token)
 # songs_trending = get_songs_from_playlist(token, treding_id) - did not work because we can look up playlist but they are locked
 #print(get_trending_songs(token))
+
+print(get_upcoming_shows_artist("Bad Suns: ACCELERATOUR USA 2026"))
