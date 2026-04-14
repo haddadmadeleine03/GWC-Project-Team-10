@@ -1,7 +1,8 @@
 import type { ReactNode } from 'react'
-import { Link, Route, Routes } from 'react-router-dom'
+import { Route, Routes } from 'react-router-dom'
 import { BoomboxLoadingScreen } from './BoomboxLoadingScreen'
 import { BoomboxLoginScreen } from './BoomboxLoginScreen'
+import { BoomboxSignupScreen } from './BoomboxSignupScreen'
 
 function PhoneFrame({
   widthPx,
@@ -27,24 +28,6 @@ function PhoneFrame({
   )
 }
 
-function SignupPlaceholder() {
-  return (
-    <div className="flex min-h-dvh flex-col items-center justify-center gap-6 bg-[#0d0d0d] px-6 text-center">
-      <p className="font-['Katibeh',serif] text-3xl text-white">Sign up</p>
-      <p className="max-w-sm font-['Inter',sans-serif] text-sm text-neutral-400">
-        This screen is not in the Figma file yet. Wire this route when the sign-up
-        frame is ready.
-      </p>
-      <Link
-        to="/login"
-        className="font-['Katibeh',serif] text-xl text-[#d9d35b] underline"
-      >
-        Back to login
-      </Link>
-    </div>
-  )
-}
-
 export default function App() {
   return (
     <Routes>
@@ -64,7 +47,14 @@ export default function App() {
           </PhoneFrame>
         }
       />
-      <Route path="/signup" element={<SignupPlaceholder />} />
+      <Route
+        path="/signup"
+        element={
+          <PhoneFrame widthPx={402} aria-label="Boombox sign up">
+            <BoomboxSignupScreen />
+          </PhoneFrame>
+        }
+      />
     </Routes>
   )
 }
