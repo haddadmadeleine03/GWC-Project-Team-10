@@ -1,0 +1,236 @@
++import os
++from datetime import datetime, timedelta, timezone
++from typing import Optional
++
++import httpx
++from dotenv import load_dotenv
++from fastapi import FastAPI, HTTPException, Query
++from fastapi.middleware.cors import CORSMiddleware
++from pydantic import BaseModel, Field
++from rapidfuzz import fuzz
++
++load_dotenv()
++
++app = FastAPI(title="BoomBox API")
++
++# CORS is open for now so frontend can connect easily during development.
++app.add_middleware(
++    CORSMiddleware,
++    allow_origins=["*"],
++    allow_credentials=True,
++    allow_methods=["*"],
++    allow_headers=["*"],
++)
++
++# In-memory storage for reviews (no database yet)
++reviews = []
++next_review_id = 1
++
++# Cached Spotify token
++spotify_token = None
++spotify_token_expiry = None
++
++
++class SearchItem(BaseModel):
++    result_type: str
++    id: str
++    name: str
++    artist: Optional[str] = None
++    album: Optional[str] = None
++    image: Optional[str] = None
++    spotify_url: Optional[str] = None
++
++
++class SearchResponse(BaseModel):
++    query: str
++    total_results: int
++    results: list[SearchItem]
++
++
++class ReviewCreate(BaseModel):
++    song_title: str = Field(..., min_length=1)
++    artist_name: str = Field(..., min_length=1)
++    album_name: Optional[str] = None
++    rating: int = Field(..., ge=1, le=5)
++    review_text: str = Field(..., min_length=1)
++    reviewer_name: str = "Anonymous"
++    cover_image: Optional[str] = None
++
++
++class Review(BaseModel):
++    id: int
++    song_title: str
++    artist_name: str
++    album_name: Optional[str] = None
++    rating: int
++    review_text: str
++    reviewer_name: str
++    cover_image: Optional[str] = None
++    created_at: datetime
++
++
++def get_spotify_token() -> str:
++    global spotify_token, spotify_token_expiry
++
++    now = datetime.now(timezone.utc)
++    if spotify_token and spotify_token_expiry and now < spotify_token_expiry:
++        return spotify_token
++
++    client_id = os.getenv("SPOTIFY_CLIENT_ID")
++    client_secret = os.getenv("SPOTIFY_CLIENT_SECRET")
++
++    if not client_id or not client_secret:
++        raise HTTPException(status_code=500, detail="Missing Spotify credentials in .env")
++
++    try:
++        token_res = httpx.post(
++            "https://accounts.spotify.com/api/token",
++            data={"grant_type": "client_credentials"},
++            auth=(client_id, client_secret),
++            timeout=15.0,
++        )
++    except httpx.RequestError:
++        raise HTTPException(status_code=502, detail="Spotify token request failed")
++
++    if token_res.status_code != 200:
++        raise HTTPException(status_code=502, detail="Spotify token request failed")
++
++    token_data = token_res.json()
++    spotify_token = token_data.get("access_token")
++    expires_in = token_data.get("expires_in", 3600)
++    spotify_token_expiry = now + timedelta(seconds=expires_in - 30)
++
++    if not spotify_token:
++        raise HTTPException(status_code=502, detail="Spotify token response was invalid")
++
++    return spotify_token
++
++
++def first_image(images: list) -> Optional[str]:
++    if not images:
++        return None
++    return images[0].get("url")
++
++
++def fuzzy_sort(query: str, items: list[SearchItem]) -> list[SearchItem]:
++    scored = []
++
++    for index, item in enumerate(items):
++        # Try matching by title, artist, and combined text
++        options = [
++            item.name,
++            item.artist or "",
++            f"{item.name} {item.artist or ''}".strip(),
++        ]
++        best_score = max(fuzz.WRatio(query, text) for text in options if text)
++        scored.append((best_score, index, item))
++
++    scored.sort(key=lambda x: (-x[0], x[1]))
++    return [row[2] for row in scored]
++
++
++@app.get("/")
++def home():
++    return {"message": "BoomBox backend is running"}
++
++
++@app.get("/search", response_model=SearchResponse)
++def search(q: str = Query(..., min_length=1), limit: int = Query(10, ge=1, le=25)):
++    token = get_spotify_token()
++
++    try:
++        spotify_res = httpx.get(
++            "https://api.spotify.com/v1/search",
++            headers={"Authorization": f"Bearer {token}"},
++            params={"q": q, "type": "track,artist", "limit": limit, "market": "US"},
++            timeout=15.0,
++        )
++    except httpx.RequestError:
++        raise HTTPException(status_code=502, detail="Spotify search request failed")
++
++    if spotify_res.status_code != 200:
++        raise HTTPException(status_code=502, detail="Spotify search request failed")
++
++    data = spotify_res.json()
++    items: list[SearchItem] = []
++
++    for track in data.get("tracks", {}).get("items", []):
++        artists = ", ".join([a.get("name", "") for a in track.get("artists", []) if a.get("name")])
++        album = track.get("album", {})
++
++        items.append(
++            SearchItem(
++                result_type="track",
++                id=track.get("id", ""),
++                name=track.get("name", ""),
++                artist=artists or None,
++                album=album.get("name"),
++                image=first_image(album.get("images", [])),
++                spotify_url=(track.get("external_urls") or {}).get("spotify"),
++            )
++        )
++
++    for artist in data.get("artists", {}).get("items", []):
++        name = artist.get("name", "")
++        items.append(
++            SearchItem(
++                result_type="artist",
++                id=artist.get("id", ""),
++                name=name,
++                artist=name,
++                album=None,
++                image=first_image(artist.get("images", [])),
++                spotify_url=(artist.get("external_urls") or {}).get("spotify"),
++            )
++        )
++
++    items = fuzzy_sort(q, items)
++
++    return SearchResponse(query=q, total_results=len(items), results=items)
++
++
++@app.post("/reviews", response_model=Review, status_code=201)
++def create_review(review: ReviewCreate):
++    global next_review_id
++
++    saved_review = Review(
++        id=next_review_id,
++        song_title=review.song_title,
++        artist_name=review.artist_name,
++        album_name=review.album_name,
++        rating=review.rating,
++        review_text=review.review_text,
++        reviewer_name=review.reviewer_name or "Anonymous",
++        cover_image=review.cover_image,
++        created_at=datetime.now(timezone.utc),
++    )
++
++    reviews.append(saved_review)
++    next_review_id += 1
++    return saved_review
++
++
++@app.get("/reviews", response_model=list[Review])
++def get_reviews(artist_name: Optional[str] = None, song_title: Optional[str] = None):
++    result = reviews
++
++    if artist_name:
++        artist_name = artist_name.lower()
++        result = [r for r in result if artist_name in r.artist_name.lower()]
++
++    if song_title:
++        song_title = song_title.lower()
++        result = [r for r in result if song_title in r.song_title.lower()]
++
++    return result
++
++
++@app.get("/reviews/{review_id}", response_model=Review)
++def get_review(review_id: int):
++    for review in reviews:
++        if review.id == review_id:
++            return review
++
++    raise HTTPException(status_code=404, detail="Review not found")
+
+)
