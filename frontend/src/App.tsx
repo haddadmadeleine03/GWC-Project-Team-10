@@ -2,6 +2,7 @@ import type { ReactNode } from 'react'
 import { Route, Routes } from 'react-router-dom'
 import { BoomboxLoadingScreen } from './BoomboxLoadingScreen'
 import { BoomboxLoginScreen } from './BoomboxLoginScreen'
+import { BoomboxHomeScreen } from './BoomboxHomeScreen'
 import { BoomboxSignupScreen } from './BoomboxSignupScreen'
 
 function PhoneFrame({
@@ -27,6 +28,21 @@ function PhoneFrame({
     </div>
   )
 }
+
+const homeShell = (
+  <PhoneFrame widthPx={402} aria-label="Boombox home">
+    <BoomboxHomeScreen />
+  </PhoneFrame>
+)
+
+const HOME_ROUTES = [
+  '/home',
+  '/trending',
+  '/community',
+  '/reviews',
+  '/search',
+  '/profile',
+] as const
 
 export default function App() {
   return (
@@ -55,6 +71,9 @@ export default function App() {
           </PhoneFrame>
         }
       />
+      {HOME_ROUTES.map((path) => (
+        <Route key={path} path={path} element={homeShell} />
+      ))}
     </Routes>
   )
 }
