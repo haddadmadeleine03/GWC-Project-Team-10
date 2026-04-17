@@ -5,6 +5,19 @@ import base64
 from requests import post, get
 import json
 import sys
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+
+app = FastAPI()
+
+# Allow your React app to talk to backend
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # later restrict this
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 load_dotenv()
 sys.stdout.reconfigure(encoding='utf-8')
@@ -98,6 +111,41 @@ def get_songs_by_artist(token, artist_id):
             })
 
     return songs[:10]  # limit results
+
+def get_top_songs_by_artist(token, artist_id):
+    headers = get_auth_header(token)
+    
+    url = f"https://api.spotify.com/v1/artists/{artist_id}/top-tracks?market=US"
+    res = get(url, headers=headers).json()
+
+    songs = []
+    for track in res.get("tracks", [])[:3]:
+        album = track["album"]
+        images = album["images"]
+
+        songs.append({
+            "id": track["id"],
+            "name": track["name"],
+            "artists": [
+                {
+                    "id": artist["id"],
+                    "name": artist["name"]
+                } for artist in track["artists"]
+            ],
+            "album": {
+                "id": album["id"],
+                "name": album["name"],
+                "image": images[0]["url"] if images else None
+            },
+            "image": images[0]["url"] if images else None,  # shortcut for UI
+            "preview_url": track["preview_url"],
+            "external_url": track["external_urls"]["spotify"],
+            "duration_ms": track["duration_ms"],
+            "popularity": track["popularity"]
+        })
+
+    return songs
+
 
 def search_songs_by_name(token, names_of_songs: list):
     url = "https://api.spotify.com/v1/search"
@@ -213,10 +261,58 @@ def search_playlists(token, playlist_name):
     return playlists[0]["id"]
 
 
+# ========================
+#   TRENDING
+# ========================
+@app.get("/trending")
+def trending():
+    token = get_token()
+    return get_trending_songs(token)
 
 
-token = get_token()
-print ("TOKEN: " + token)
+# ========================
+#   ARTIST
+# ========================
+@app.get("/artist/{artist_name}/top-tracks")
+def top_tracks(artist_name: str):
+    token = get_token()
+    artist = search_for_artist(token, artist_name)
+    if not artist:
+        raise HTTPException(status_code=404, detail="Artist not found")
+    return get_top_songs_by_artist(token, artist["id"])
+
+
+@app.get("/artist/{artist_name}/songs")
+def artist_songs(artist_name: str):
+    token = get_token()
+    artist = search_for_artist(token, artist_name)
+    if not artist:
+        raise HTTPException(status_code=404, detail="Artist not found")
+    return get_songs_by_artist(token, artist["id"])
+
+
+# ========================
+#   SHOWS / TICKETMASTER
+# ========================
+@app.get("/shows/artist/{artist_name}")
+def shows_by_artist(artist_name: str):
+    try:
+        return get_upcoming_shows_artist(artist_name)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+
+@app.get("/shows/city/{city_name}")
+def shows_by_city(city_name: str):
+    try:
+        return get_upcoming_shows_city(city_name)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+
+
+# token = get_token()
+# print ("TOKEN: " + token)
 # result = search_for_artist(token, "ACDC")
 # artist_id = result["id"]
 # print(result["name"])
@@ -225,5 +321,4 @@ print ("TOKEN: " + token)
 # treding_id = search_trending_playlist(token)
 # songs_trending = get_songs_from_playlist(token, treding_id) - did not work because we can look up playlist but they are locked
 #print(get_trending_songs(token))
-
-print(get_upcoming_shows_artist("Bad Suns: ACCELERATOUR USA 2026"))
+#print(get_upcoming_shows_artist("Bad Suns: ACCELERATOUR USA 2026"))
